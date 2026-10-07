@@ -7,7 +7,6 @@
  */
 
 import {
-  createClientAdapter,
   closePosition,
   executionEvent,
   getAccountInformation,
@@ -17,6 +16,10 @@ import {
   registerEvent,
   subscribeQuotes,
 } from "https://esm.sh/@spotware-web-team/sdk";
+
+import {
+  createClientAdapter,
+} from "https://esm.sh/@spotware-web-team/sdk-external-api";
 
 import { take, tap, catchError } from "https://esm.sh/rxjs";
 import { createLogger } from "https://esm.sh/@veksa/logger";
