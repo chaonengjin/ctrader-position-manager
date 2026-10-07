@@ -347,19 +347,61 @@ $("refreshButton").addEventListener("click", refreshAccount);
 async function connectToCtrader() {
   try {
     setConnection("", "Connecting…");
-    const logger = createLogger(window.location.href.includes("showLogs"));
+    showNotice("Connecting to cTrader", "Establishing the official Plugin SDK handshake…", "warning");
+
+    const logger = createLogger(true);
     adapter = createClientAdapter({ logger });
 
-    // Official cTrader handshake: confirm -> register -> confirm.
-    handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe();
+    // Official cTrader handshake:
+    // 1) confirm -> 2) wait for register -> 3) confirm -> connected.
+    handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe({
+      error: (error) => console.error("initial confirmEvent", error),
+    });
 
     registerEvent(adapter).pipe(
       take(1),
       tap(() => {
-        handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe();
+        handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe({
+          error: (error) => console.error("final confirmEvent", error),
+        });
+
         connected = true;
         setConnection("online", "Connected");
         hideNotice();
+
+        // Start continuous streams ONLY after the handshake is complete.
+        executionEvent(adapter).pipe(
+          tap((event) => {
+            console.log("executionEvent", event);
+            applyExecutionEvent(event);
+            subscribePositionQuotes();
+          }),
+          catchError((error) => {
+            console.error("executionEvent", error);
+            showNotice("Execution stream error", String(error?.message || error), "error");
+            return [];
+          })
+        ).subscribe();
+
+        quoteEvent(adapter).pipe(
+          tap((event) => {
+            const root = unwrap(event);
+            const updates = root?.quotes || root?.quote || root?.payload?.quotes || root?.payload?.quote;
+            const list = Array.isArray(updates) ? updates : updates ? [updates] : [root];
+            for (const q of list) {
+              const id = firstDefined(q?.symbolId, q?.symbol?.symbolId);
+              if (id !== undefined) quotes.set(Number(id), q);
+            }
+            renderPositions();
+          }),
+          catchError((error) => {
+            console.error("quoteEvent", error);
+            showNotice("Quote stream error", String(error?.message || error), "error");
+            return [];
+          })
+        ).subscribe();
+
+        // Request account information only after the host confirms the plugin.
         refreshAccount();
         renderPositions();
       }),
@@ -367,44 +409,23 @@ async function connectToCtrader() {
         console.error("registerEvent", error);
         connected = false;
         setConnection("error", "Connection failed");
-        showNotice("cTrader connection failed", "Open this page from inside the cTrader Web Plugin environment.", "error");
-        return [];
-      })
-    ).subscribe();
-
-    // Continuous event streams become active after registration.
-    executionEvent(adapter).pipe(
-      tap((event) => {
-        console.log("executionEvent", event);
-        applyExecutionEvent(event);
-        subscribePositionQuotes();
-      }),
-      catchError((error) => {
-        console.error("executionEvent", error);
-        return [];
-      })
-    ).subscribe();
-
-    quoteEvent(adapter).pipe(
-      tap((event) => {
-        const root = unwrap(event);
-        const updates = root?.quotes || root?.quote || root?.payload?.quotes || root?.payload?.quote;
-        const list = Array.isArray(updates) ? updates : updates ? [updates] : [root];
-        for (const q of list) {
-          const id = firstDefined(q?.symbolId, q?.symbol?.symbolId);
-          if (id !== undefined) quotes.set(Number(id), q);
-        }
-        renderPositions();
-      }),
-      catchError((error) => {
-        console.error("quoteEvent", error);
+        showNotice(
+          "cTrader SDK handshake failed",
+          String(error?.message || error || "registerEvent did not complete"),
+          "error"
+        );
         return [];
       })
     ).subscribe();
   } catch (error) {
-    console.error(error);
+    console.error("SDK initialisation", error);
+    connected = false;
     setConnection("error", "Connection failed");
-    showNotice("Plugin error", "The SDK could not be initialised.", "error");
+    showNotice(
+      "Plugin SDK initialisation failed",
+      String(error?.message || error),
+      "error"
+    );
   }
 }
 
